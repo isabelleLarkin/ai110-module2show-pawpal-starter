@@ -69,3 +69,48 @@ Calling `Plan.complete_task()` marks a task done and immediately appends a new p
 
 ### Task Isolation Between Pet and Plan
 When a plan is created, tasks are deep-copied from the pet's template. Completing or modifying a task in the plan no longer affects the pet's original task definitions.
+
+# Testing PawPal+
+Command: python3 -m pytest
+
+The test suite covers 33 cases across five areas. Sorting tests verify that get_tasks_by_priority correctly orders tasks by priority, then preference, then frequency urgency as a tiebreaker, that get_tasks_by_duration respects the shortest_first flag, and that neither sort mutates the original task list. Filtering tests confirm that get_tasks_by_frequency returns only matching tasks, returns an empty list when nothing matches, and raises on an invalid frequency string. Recurrence tests check that get_next_occurrence advances the scheduled date by the right number of days for daily, weekly, and monthly frequencies, that the returned task is always pending, and that name and duration are preserved; they also verify that plan.complete_task marks the original done, appends a pending next occurrence, and chains correctly when called twice in a row. Conflict detection tests confirm that tasks from different pets sharing a time slot are flagged, that same-pet overlaps and "anytime" tasks are never flagged, and that conflict messages identify both pets and tasks by name. Finally, availability and plan management tests cover time deduction on add, time restoration on remove, blocking when a plan exceeds available time or duplicates a pet-day pair, the exact-fit boundary case, and cascading plan removal when a pet is deleted.
+
+I would give my system 4 stars, because all of the tests passed, however the logic is complex so there is the possibility of an unforeseen error.
+
+# Features
+
+## Task Management
+- **Task creation with validation** — enforces non-empty name, positive duration, valid priority (1–3), valid frequency, and valid time-of-day slot before setting any attribute
+- **Completion tracking** — `completeTask()` and `resetTask()` toggle a boolean flag, enabling status filtering across a plan
+- **Recurrence scheduling** — `getNextOccurrence()` computes the next task date by advancing `scheduledDate` by a frequency-mapped day offset (`daily=1`, `weekly=7`, `monthly=30`) and returns a fresh pending copy
+
+---
+
+## Pet Management
+- **Duplicate task prevention** — `addTask()` checks by name before appending, blocking the same task from appearing twice in `requiredTasks`
+- **Task removal with existence check** — `removeTask()` validates presence before removing, raising a descriptive error if not found
+
+---
+
+## Plan Scheduling
+- **Pet-seeded task list** — `setPet()` deep-copies the pet's `requiredTasks` into the plan at assignment time, isolating plan tasks from future pet mutations
+- **Multi-key priority sort** — `getTasksByPriority()` sorts by `priorityLevel` → `preferenceLevel` → frequency urgency (`daily > weekly > monthly`), all descending
+- **Duration sort** — `getTasksByDuration()` sorts by `time` ascending or descending via a `shortestFirst` flag, without mutating the original task list
+- **Status filtering** — `getTasksByStatus(completed)` filters tasks by boolean completion state; `getPendingTasks()` wraps this for the common case
+- **Frequency filtering** — `getTasksByFrequency()` returns only tasks matching a given recurrence string, validated against `VALID_FREQUENCIES`
+- **Total time aggregation** — `getTotalTime()` sums `time` across all plan tasks in a single pass
+- **Completion with auto-recurrence** — `completeTask(task)` marks a task done and immediately appends its next occurrence to the plan via `getNextOccurrence()`
+- **Bulk reset** — `resetAllTasks()` iterates all plan tasks and calls `resetTask()` on each
+
+---
+
+## Owner & Schedule Management
+- **Availability budgeting** — `addAvailability()` and `subtractAvailability()` maintain a running `timeAvailable` balance; subtraction blocks if the deduction would go below zero
+- **Feasibility check** — `canFitPlan()` compares `plan.getTotalTime()` against `timeAvailable` before committing
+- **Atomic plan commitment** — `addPlan()` enforces three guards in sequence: duplicate plan, duplicate pet+day combination, and time budget overflow — then deducts time automatically on success
+- **Cascading pet removal** — `removePet()` first finds and removes all plans associated with that pet (restoring their time), then removes the pet
+- **Plan removal with time restoration** — `removePlan()` adds the plan's total time back to `timeAvailable` on removal
+- **Schedule lookup** — `getPlansByDay()` and `getPlansByPet()` filter the plans list by day string or pet object reference
+- **Cross-pet task aggregation** — `getAllTasks()` flattens `requiredTasks` across all owned pets into a single list
+- **Pet name lookup** — `getTasksByPetName()` resolves a pet by name string and returns its task list, raising an error if not found
+- **Time slot conflict detection** — `getTimeSlotConflicts()` compares `timeOfDay` values across all existing plans against a candidate plan, skipping `"anytime"` tasks and same-pet plans, and returns a list of human-readable conflict descriptions

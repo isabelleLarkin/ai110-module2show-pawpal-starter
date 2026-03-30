@@ -28,6 +28,9 @@ if "feedback" not in st.session_state:
 
 PRIORITY_MAP = {"low": 1, "medium": 2, "high": 3}
 PRIORITY_LABELS = {1: "Low", 2: "Medium", 3: "High"}
+PRIORITY_ICONS = {1: "🟢 Low", 2: "🟡 Medium", 3: "🔴 High"}
+FREQUENCY_ICONS = {"daily": "📅 Daily", "weekly": "🗓️ Weekly", "monthly": "📆 Monthly"}
+SLOT_ICONS = {"morning": "🌅 Morning", "afternoon": "☀️ Afternoon", "evening": "🌙 Evening", "anytime": "🕐 Anytime"}
 
 # --- Owner & Pet Setup ---
 st.subheader("Owner & Pet")
@@ -102,15 +105,15 @@ if st.session_state.feedback:
         st.error(msg)
 
 if st.session_state.tasks:
-    st.write("Current tasks:")
+    st.caption(f"{len(st.session_state.tasks)} task(s) queued — {sum(t.time for t in st.session_state.tasks)} min total")
     st.table([
         {
             "Task": t.name,
             "Duration (min)": t.time,
-            "Priority": PRIORITY_LABELS[t.priority_level],
-            "Preference": PRIORITY_LABELS[t.preference_level],
-            "Frequency": t.frequency.capitalize(),
-            "Time of Day": t.time_of_day.capitalize()
+            "Priority": PRIORITY_ICONS[t.priority_level],
+            "Preference": PRIORITY_ICONS[t.preference_level],
+            "Frequency": FREQUENCY_ICONS[t.frequency],
+            "Time of Day": SLOT_ICONS[t.time_of_day],
         }
         for t in st.session_state.tasks
     ])
@@ -165,29 +168,58 @@ if st.button("Generate schedule"):
                 "total_time": plan.get_total_time(),
                 "time_remaining": owner.time_available,
                 "conflicts": conflicts,
-                "rows": [
-                    {
-                        "Task": t.name,
-                        "Duration (min)": t.time,
-                        "Priority": PRIORITY_LABELS[t.priority_level],
-                        "Preference": PRIORITY_LABELS[t.preference_level],
-                        "Frequency": t.frequency.capitalize(),
-                        "Time of Day": t.time_of_day.capitalize(),
-                        "Status": "Done" if t.completed else "Pending"
-                    }
-                    for t in plan.get_tasks_by_priority()
-                ]
+                "plan": plan,
             }
             st.session_state.feedback = None
 
 # --- Persistent Schedule Display ---
 if st.session_state.schedule:
     s = st.session_state.schedule
-    st.success(f"{s['owner']}'s {s['day']} schedule for {s['pet']}:")
-    st.table(s["rows"])
-    st.info(
-        f"Total time required: {s['total_time']} min  |  "
-        f"Time remaining: {s['time_remaining']} min"
+    plan = s["plan"]
+
+    st.divider()
+    st.subheader(f"📋 {s['day']} Schedule — {s['pet']}")
+    st.success(f"Schedule generated for **{s['owner']}**. All tasks fit within your availability.")
+
+    conflicts = s.get("conflicts", [])
+    if conflicts:
+        for conflict in conflicts:
+            st.warning(f"⚠️ Time slot conflict: {conflict}")
+    else:
+        st.success("✅ No time slot conflicts.")
+
+    pending = len(plan.get_tasks_by_status(completed=False))
+    done = len(plan.get_tasks_by_status(completed=True))
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total time", f"{s['total_time']} min")
+    m2.metric("Time remaining", f"{s['time_remaining']} min")
+    m3.metric("Tasks", f"{pending} pending · {done} done")
+
+    st.divider()
+
+    sort_mode = st.radio(
+        "Sort tasks by",
+        ["Priority", "Duration (shortest first)", "Duration (longest first)"],
+        horizontal=True,
     )
-    for conflict in s.get("conflicts", []):
-        st.warning(f"Time slot conflict: {conflict}")
+
+    if sort_mode == "Priority":
+        sorted_tasks = plan.get_tasks_by_priority()
+    elif sort_mode == "Duration (shortest first)":
+        sorted_tasks = plan.get_tasks_by_duration(shortest_first=True)
+    else:
+        sorted_tasks = plan.get_tasks_by_duration(shortest_first=False)
+
+    st.table([
+        {
+            "Task": t.name,
+            "Duration (min)": t.time,
+            "Priority": PRIORITY_ICONS[t.priority_level],
+            "Preference": PRIORITY_ICONS[t.preference_level],
+            "Frequency": FREQUENCY_ICONS[t.frequency],
+            "Time of Day": SLOT_ICONS[t.time_of_day],
+            "Status": "✅ Done" if t.completed else "⏳ Pending",
+        }
+        for t in sorted_tasks
+    ])
