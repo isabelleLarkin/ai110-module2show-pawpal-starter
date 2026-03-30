@@ -117,8 +117,8 @@ mochi_plan.set_pet(mochi)
 mochi_plan.set_day("monday")
 
 owner.add_plan(bella_plan)
-conflicts = owner.get_time_slot_conflicts(mochi_plan)
 owner.add_plan(mochi_plan)
+conflicts = owner.get_time_slot_conflicts(mochi_plan)
 
 # --- Mark one task done to demonstrate status filtering ---
 bella_plan.tasks[0].complete_task()
