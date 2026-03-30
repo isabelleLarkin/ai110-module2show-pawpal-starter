@@ -1,10 +1,16 @@
+import copy
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import List
 
 TIME_UNIT = "minutes"
 
 
 VALID_FREQUENCIES = ["daily", "weekly", "monthly"]
+FREQUENCY_PRIORITY = {"daily": 3, "weekly": 2, "monthly": 1}
+FREQUENCY_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
+
+VALID_TIME_SLOTS = ["morning", "afternoon", "evening", "anytime"]
 
 @dataclass
 class Task:
@@ -14,6 +20,8 @@ class Task:
     frequency: str = ""     # "daily", "weekly", or "monthly"
     completed: bool = False
     preference_level: int = 0  # 1 = low, 2 = medium, 3 = high
+    time_of_day: str = "anytime"  # "morning", "afternoon", "evening", or "anytime"
+    scheduled_date: date = field(default_factory=date.today)
 
     def set_name(self, name: str):
         """Set the task name, rejecting empty strings."""
@@ -22,8 +30,8 @@ class Task:
         self.name = name
 
     def set_time(self, time: int):
-        """Set the task duration in minutes, rejecting negative values."""
-        if time < 0:
+        """Set the task duration in minutes; must be greater than zero."""
+        if time <= 0:
             raise ValueError(f"Time must be a positive number of {TIME_UNIT}.")
         self.time = time
 
@@ -53,6 +61,25 @@ class Task:
             raise ValueError("Preference level must be 1 (low), 2 (medium), or 3 (high).")
         self.preference_level = level
 
+    def set_time_of_day(self, slot: str):
+        """Set the preferred time of day: morning, afternoon, evening, or anytime."""
+        if slot not in VALID_TIME_SLOTS:
+            raise ValueError(f"Time of day must be one of: {VALID_TIME_SLOTS}.")
+        self.time_of_day = slot
+
+    def set_scheduled_date(self, d: date):
+        """Set the date this task occurrence is scheduled for."""
+        self.scheduled_date = d
+
+    def get_next_occurrence(self) -> "Task":
+        """Return a new pending Task scheduled for the next occurrence based on frequency."""
+        if self.frequency not in FREQUENCY_DAYS:
+            raise ValueError(f"Cannot compute next occurrence: frequency '{self.frequency}' is not set.")
+        next_task = copy.copy(self)
+        next_task.completed = False
+        next_task.scheduled_date = self.scheduled_date + timedelta(days=FREQUENCY_DAYS[self.frequency])
+        return next_task
+
 
 @dataclass
 class Pet:
@@ -80,8 +107,8 @@ class Pet:
         self.age = age
 
     def add_task(self, task: Task):
-        """Add a task to the pet's required tasks, blocking duplicates."""
-        if task in self.required_tasks:
+        """Add a task to the pet's required tasks, blocking duplicate names."""
+        if any(t.name == task.name for t in self.required_tasks):
             raise ValueError(f"Task '{task.name}' is already in {self.name}'s required tasks.")
         self.required_tasks.append(task)
 
@@ -113,13 +140,13 @@ class Plan:
         if self.pet is not None:
             raise ValueError(f"Pet is already set to '{self.pet.name}'. Create a new Plan to assign a different pet.")
         self.pet = pet
-        self.tasks = list(pet.required_tasks)
+        self.tasks = [copy.copy(task) for task in pet.required_tasks]
 
     def add_task(self, task: Task):
-        """Add an extra task to the plan beyond the pet's defaults."""
+        """Add an extra task to the plan beyond the pet's defaults, blocking duplicate names."""
         if self.pet is None:
             raise ValueError("A pet must be set before adding tasks to the plan.")
-        if task in self.tasks:
+        if any(t.name == task.name for t in self.tasks):
             raise ValueError(f"Task '{task.name}' is already in the plan.")
         self.tasks.append(task)
 
@@ -135,17 +162,40 @@ class Plan:
 
     def get_pending_tasks(self) -> List[Task]:
         """Return all tasks in the plan that have not yet been completed."""
-        return [task for task in self.tasks if not task.completed]
+        return self.get_tasks_by_status(completed=False)
+
+    def get_tasks_by_status(self, completed: bool) -> List[Task]:
+        """Return tasks matching the given completion status."""
+        return [task for task in self.tasks if task.completed == completed]
 
     def get_tasks_by_priority(self) -> List[Task]:
-        """Return all tasks sorted from highest to lowest priority."""
-        return sorted(self.tasks, key=lambda task: task.priority_level, reverse=True)
+        """Return tasks sorted by priority, then preference, then frequency urgency — all highest first."""
+        return sorted(
+            self.tasks,
+            key=lambda task: (
+                task.priority_level,
+                task.preference_level,
+                FREQUENCY_PRIORITY.get(task.frequency, 0),
+            ),
+            reverse=True,
+        )
+
+    def get_tasks_by_duration(self, shortest_first: bool = True) -> List[Task]:
+        """Return all tasks sorted by duration. Shortest first by default."""
+        return sorted(self.tasks, key=lambda task: task.time, reverse=not shortest_first)
 
     def get_tasks_by_frequency(self, frequency: str) -> List[Task]:
         """Return all tasks in the plan matching the given frequency."""
         if frequency not in VALID_FREQUENCIES:
             raise ValueError(f"Frequency must be one of: {VALID_FREQUENCIES}.")
         return [task for task in self.tasks if task.frequency == frequency]
+
+    def complete_task(self, task: "Task"):
+        """Mark a task complete and append its next occurrence to the plan."""
+        if task not in self.tasks:
+            raise ValueError(f"Task '{task.name}' not found in the plan.")
+        task.complete_task()
+        self.tasks.append(task.get_next_occurrence())
 
     def reset_all_tasks(self):
         """Reset the completion status of all tasks in the plan to pending."""
@@ -230,3 +280,30 @@ class Owner:
     def get_all_tasks(self) -> List[Task]:
         """Return a flat list of all required tasks across every pet the owner has."""
         return [task for pet in self.pets for task in pet.required_tasks]
+
+    def get_tasks_by_pet_name(self, pet_name: str) -> List[Task]:
+        """Return all required tasks for the pet with the given name."""
+        pet = next((p for p in self.pets if p.name == pet_name), None)
+        if pet is None:
+            raise ValueError(f"No pet named '{pet_name}' found.")
+        return list(pet.required_tasks)
+
+    def get_time_slot_conflicts(self, plan: Plan) -> List[str]:
+        """Return conflict descriptions where this plan's tasks share a time slot with existing plans."""
+        conflicts = []
+        for existing_plan in self.plans:
+            if existing_plan.pet == plan.pet:
+                continue
+            for new_task in plan.tasks:
+                if new_task.time_of_day == "anytime":
+                    continue
+                for existing_task in existing_plan.tasks:
+                    if existing_task.time_of_day == "anytime":
+                        continue
+                    if new_task.time_of_day == existing_task.time_of_day:
+                        conflicts.append(
+                            f"'{new_task.name}' ({plan.pet.name}) and "
+                            f"'{existing_task.name}' ({existing_plan.pet.name}) "
+                            f"are both scheduled in the {new_task.time_of_day}."
+                        )
+        return conflicts
